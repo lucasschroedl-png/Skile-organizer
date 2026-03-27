@@ -674,8 +674,8 @@ const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
       </div>
       <div style="display:flex; gap:10px; align-items:center;">
         <div class="view-toggle">
-          <button class="active" id="btn-cal" onclick="setView('calendar')">📅 Kalender</button>
-          <button id="btn-list" onclick="setView('list')">☰ Liste</button>
+          <button class="active" id="btn-list" onclick="setView('list')">☰ Liste</button>
+          <button id="btn-cal" onclick="setView('calendar')">📅 Kalender</button>
         </div>
         <button class="btn btn-secondary" onclick="openDrive()" oncontextmenu="event.preventDefault();setDriveUrl()" title="Klicken: Öffnen | Rechtsklick: URL ändern">📁 Infos</button>
         <button class="btn btn-primary" onclick="openModal('auftritt')">+ Neuer Auftritt</button>
@@ -683,7 +683,7 @@ const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
     </div>
 
     <!-- KALENDER VIEW -->
-    <div id="view-calendar">
+    <div id="view-calendar" style="display:none;">
       <div class="calendar-container">
         <div class="cal-nav">
           <button onclick="changeMonth(-1)">‹</button>
@@ -703,7 +703,7 @@ const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
     </div>
 
     <!-- LIST VIEW -->
-    <div id="view-list" style="display:none;">
+    <div id="view-list">
       <div class="list-view" id="list-container"></div>
     </div>
 
@@ -1143,8 +1143,8 @@ function showPage(name) {
 function setView(v) {
   document.getElementById('view-calendar').style.display = v === 'calendar' ? '' : 'none';
   document.getElementById('view-list').style.display     = v === 'list'     ? '' : 'none';
-  document.getElementById('btn-cal').classList.toggle('active',  v === 'calendar');
   document.getElementById('btn-list').classList.toggle('active', v === 'list');
+  document.getElementById('btn-cal').classList.toggle('active',  v === 'calendar');
   if (v === 'list') renderList();
   else renderCalendar();
 }
