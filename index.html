@@ -693,7 +693,7 @@ const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
 <script>
   (function() {
-    if (sessionStorage.getItem('skile_auth') === '1') {
+    if (localStorage.getItem('skile_auth') === '1') {
       document.getElementById('pw-overlay').style.display = 'none';
     }
     setTimeout(function() {
@@ -705,7 +705,7 @@ const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
   function checkPassword() {
     var val = document.getElementById('pw-input').value;
     if (val === 'SK1LE') {
-      sessionStorage.setItem('skile_auth', '1');
+      localStorage.setItem('skile_auth', '1');
       document.getElementById('pw-overlay').style.display = 'none';
     } else {
       var err = document.getElementById('pw-error');
@@ -811,15 +811,6 @@ const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
       </div>
     </div>
 
-    <!-- Proben Liste -->
-    <div style="margin-top:1.5rem;">
-      <div class="panel">
-        <div class="panel-header">Alle Proben</div>
-        <div class="panel-body">
-          <div class="list-view" id="probe-list"></div>
-        </div>
-      </div>
-    </div>
 
     <!-- Proben Kalender – ganz unten -->
     <div style="margin-top:1.5rem;">
@@ -964,6 +955,15 @@ const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
         <label>Notizen</label>
         <textarea id="p-notizen" placeholder="Was soll geübt werden?"></textarea>
       </div>
+      <div class="form-group full">
+        <label>Songs für diese Probe</label>
+        <div id="p-songs-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:6px;">
+          <input type="text" id="p-song-title" placeholder="Song Name" style="flex:1;">
+          <input type="text" id="p-song-url" placeholder="YouTube Link" style="flex:1.5;">
+          <button type="button" class="btn btn-sm btn-secondary" onclick="addProbeSong()">+ Song</button>
+        </div>
+      </div>
     </div>
     <div class="form-actions">
       <button class="btn btn-secondary" onclick="closeModal('probe')">Abbrechen</button>
@@ -1045,6 +1045,8 @@ let editingId      = null;
 let editingProbeId = null;
 let currentPage    = 'auftritte';
 let _realtimeSubs  = [];
+let _probeSongs    = [];
+let _driveUrl      = '';
 
 const MONTHS = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
 const TYPES  = { hochzeit:'💍 Hochzeit', bierzelt:'🍺 Bierzelt', geburtstag:'🎂 Geburtstag', firmenfeier:'🏢 Firmenfeier', other:'🎵 Sonstiges' };
@@ -1092,7 +1094,7 @@ async function loadAll() {
     auftritte = (resA.data || []).map(dbToAuftritt);
     proben    = (resP.data || []).map(dbToProbe);
 
-    // Load shared sheet URL
+    // Load shared settings (sheetUrl, driveUrl)
     try {
       const { data: settings } = await _sb.from('settings').select('*');
       if (settings) {
@@ -1103,6 +1105,8 @@ async function loadAll() {
           const openBtn = document.getElementById('btn-open-sheet');
           if (openBtn) openBtn.style.display = '';
         }
+        const driveSetting = settings.find(s => s.key === 'driveUrl');
+        if (driveSetting?.value) _driveUrl = driveSetting.value;
       }
     } catch(e) { /* settings table optional */ }
 
@@ -1138,6 +1142,21 @@ function setupRealtime() {
       // reload comments for current open modal
       if (activeCommentId) renderCommentsList();
     })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, async () => {
+      try {
+        const { data: settings } = await _sb.from('settings').select('*');
+        if (!settings) return;
+        const sheetSetting = settings.find(s => s.key === 'sheetUrl');
+        if (sheetSetting?.value) {
+          localStorage.setItem('sheetUrl', sheetSetting.value);
+          renderSheet(sheetSetting.value);
+          const openBtn = document.getElementById('btn-open-sheet');
+          if (openBtn) openBtn.style.display = '';
+        }
+        const driveSetting = settings.find(s => s.key === 'driveUrl');
+        if (driveSetting?.value) _driveUrl = driveSetting.value;
+      } catch(e) { /* ignore */ }
+    })
     .subscribe();
   _realtimeSubs.push(ch);
 }
@@ -1157,6 +1176,7 @@ function dbToProbe(r) {
   return {
     id: Number(r.id), datum: r.datum, uhrzeit: r.uhrzeit || '19:00',
     thema: r.thema || '', notizen: r.notizen || '', kommentare: r.kommentare || [],
+    songs: Array.isArray(r.songs) ? r.songs : [],
   };
 }
 
@@ -1238,6 +1258,8 @@ function openModal(type, prefillDate) {
       } else {
         document.getElementById('p-datum').value = '';
       }
+      _probeSongs = [];
+      renderProbeSongsForm();
     }
     if (!document.getElementById('p-uhrzeit').value) {
       document.getElementById('p-uhrzeit').value = '19:00';
@@ -1370,6 +1392,7 @@ async function saveProbe() {
     thema:      document.getElementById('p-thema').value,
     notizen:    document.getElementById('p-notizen').value,
     kommentare: editingProbeId ? (proben.find(x => x.id === editingProbeId)?.kommentare || []) : [],
+    songs:      _probeSongs,
   };
 
   try {
@@ -1616,42 +1639,43 @@ function changeMonthProbe(dir) {
 }
 
 // ══════════════════════════════════════════
+// PROBE SONGS (modal helpers)
+// ══════════════════════════════════════════
+function addProbeSong() {
+  const titleEl = document.getElementById('p-song-title');
+  const urlEl   = document.getElementById('p-song-url');
+  const url     = urlEl.value.trim();
+  if (!url) { alert('Bitte YouTube Link eingeben.'); return; }
+  const title = titleEl.value.trim() || url;
+  _probeSongs.push({ title, url });
+  titleEl.value = '';
+  urlEl.value   = '';
+  renderProbeSongsForm();
+}
+
+function removeProbeSong(idx) {
+  _probeSongs.splice(idx, 1);
+  renderProbeSongsForm();
+}
+
+function renderProbeSongsForm() {
+  const list = document.getElementById('p-songs-list');
+  if (!list) return;
+  if (_probeSongs.length === 0) { list.innerHTML = ''; return; }
+  list.innerHTML = _probeSongs.map((s, i) => `
+    <div style="display:flex;align-items:center;gap:8px;padding:5px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;">
+      <span style="flex:1;font-size:0.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.title}</span>
+      <a href="${s.url}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="font-size:0.75rem;color:#ff6b6b;text-decoration:none;padding:2px 8px;border:1px solid rgba(255,60,60,.35);border-radius:4px;">▶ YT</a>
+      <button type="button" onclick="removeProbeSong(${i})" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1rem;line-height:1;padding:0 2px;">✕</button>
+    </div>
+  `).join('');
+}
+
+// ══════════════════════════════════════════
 // RENDER PROBE LIST
 // ══════════════════════════════════════════
 function renderProbeList() {
   renderProbeUpcoming();
-  const container = document.getElementById('probe-list');
-  const sorted = [...proben].sort((a,b) => b.datum.localeCompare(a.datum));
-
-  if (sorted.length === 0) {
-    container.innerHTML = `<div class="empty-state"><div class="icon">🥁</div><p>Noch keine Proben eingetragen.</p></div>`;
-    return;
-  }
-
-  container.innerHTML = sorted.map(p => {
-    const d = new Date(p.datum + 'T00:00:00');
-    const day   = d.getDate();
-    const month = MONTHS[d.getMonth()].slice(0,3).toUpperCase();
-    const commentCount = (p.kommentare || []).length;
-    return `
-    <div class="event-card" onclick="showProbeDetail(${p.id})" style="cursor:pointer;">
-      <div class="event-date-block">
-        <div class="day">${day}</div>
-        <div class="month">${month}</div>
-      </div>
-      <div class="event-info">
-        <h3>${p.thema || 'Probe'}</h3>
-        <div class="event-meta">
-          ${p.uhrzeit ? `<span>🕐 ${p.uhrzeit} Uhr</span>` : ''}
-          ${p.notizen ? `<span>📝 ${p.notizen.slice(0,40)}${p.notizen.length>40?'…':''}</span>` : ''}
-        </div>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">
-        <span class="badge probe">🥁 Probe</span>
-        ${commentCount > 0 ? `<span style="font-size:0.75rem;color:var(--text-muted);">💬 ${commentCount}</span>` : ''}
-      </div>
-    </div>`;
-  }).join('');
 }
 
 // ══════════════════════════════════════════
@@ -1713,18 +1737,26 @@ function renderAll() {
 // GOOGLE DRIVE
 // ══════════════════════════════════════════
 function openDrive() {
-  let url = localStorage.getItem('driveUrl');
-  if (!url) {
-    url = prompt('Google Drive Ordner URL einfügen:');
+  if (!_driveUrl) {
+    const url = prompt('Google Drive Ordner URL einfügen:');
     if (!url || !url.trim()) return;
-    localStorage.setItem('driveUrl', url.trim());
+    saveDriveUrl(url.trim());
+    return;
   }
-  window.open(url, '_blank');
+  window.open(_driveUrl, '_blank');
 }
 
-function setDriveUrl() {
-  const url = prompt('Google Drive Ordner URL:', localStorage.getItem('driveUrl') || '');
-  if (url !== null && url.trim()) localStorage.setItem('driveUrl', url.trim());
+async function setDriveUrl() {
+  const url = prompt('Google Drive Ordner URL:', _driveUrl || '');
+  if (url !== null && url.trim()) saveDriveUrl(url.trim());
+}
+
+async function saveDriveUrl(url) {
+  _driveUrl = url;
+  window.open(url, '_blank');
+  try {
+    await _sb.from('settings').upsert({ key: 'driveUrl', value: url });
+  } catch(e) { /* settings table optional */ }
 }
 
 // ══════════════════════════════════════════
@@ -1738,6 +1770,7 @@ function showProbeDetail(id) {
   document.getElementById('probe-detail-title').textContent = p.thema || 'Probe';
 
   const commentCount = (p.kommentare || []).length;
+  const songs = p.songs || [];
   document.getElementById('probe-detail-body').innerHTML = `
     <div class="detail-section">
       <h4>Info</h4>
@@ -1745,6 +1778,7 @@ function showProbeDetail(id) {
       <div class="detail-row"><span class="label">Uhrzeit</span><span>${p.uhrzeit || '19:00'} Uhr</span></div>
     </div>
     ${p.notizen ? `<div class="detail-section"><h4>Notizen / Themen</h4><p style="font-size:.9rem;line-height:1.6;">${p.notizen}</p></div>` : ''}
+    ${songs.length ? `<div class="detail-section"><h4>🎵 Songs</h4><div style="display:flex;flex-direction:column;gap:6px;">${songs.map(s => `<a href="${s.url}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:8px;padding:6px 12px;background:rgba(255,0,0,.15);border:1px solid rgba(255,60,60,.3);border-radius:8px;font-size:0.85rem;color:#ff6b6b;text-decoration:none;">▶ ${s.title}</a>`).join('')}</div></div>` : ''}
   `;
 
   const actionsEl = document.getElementById('modal-probe-detail').querySelector('.form-actions');
@@ -1776,6 +1810,8 @@ function editProbe(id) {
   document.getElementById('p-uhrzeit').value = p.uhrzeit || '19:00';
   document.getElementById('p-thema').value   = p.thema || '';
   document.getElementById('p-notizen').value = p.notizen || '';
+  _probeSongs = [...(p.songs || [])];
+  renderProbeSongsForm();
   document.getElementById('modal-probe').querySelector('.modal-title').textContent = 'Probe bearbeiten';
   closeModal('probe-detail');
   openModal('probe');
@@ -1890,23 +1926,28 @@ function renderProbeUpcoming() {
 
   container.innerHTML = upcoming.map(p => {
     const d = new Date(p.datum + 'T00:00:00');
-    const dateStr = d.toLocaleDateString('de-DE', { weekday:'short', day:'numeric', month:'short' });
     const lines = p.notizen ? p.notizen.split('\n').filter(l => l.trim()) : [];
+    const songs = p.songs || [];
+    const hasSongs = songs.length > 0;
+    const hasLines = lines.length > 0;
     return `
-    <div onclick="showProbeDetail(${p.id})" style="padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;" onmouseover="this.style.background='rgba(232,197,71,.06)'" onmouseout="this.style.background=''">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:${lines.length ? '8px' : '0'};">
-        <div style="background:rgba(232,197,71,.15);border-radius:8px;padding:4px 10px;text-align:center;min-width:56px;">
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:${hasLines || hasSongs ? '8px' : '0'};" onclick="showProbeDetail(${p.id})" style="cursor:pointer;transition:background .15s;" onmouseover="this.style.background='rgba(232,197,71,.06)'" onmouseout="this.style.background=''">
+        <div style="background:rgba(232,197,71,.15);border-radius:8px;padding:4px 10px;text-align:center;min-width:56px;cursor:pointer;" onclick="showProbeDetail(${p.id})">
           <div style="font-family:'Bebas Neue',sans-serif;font-size:1.3rem;color:var(--accent);line-height:1;">${d.getDate()}</div>
           <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">${MONTHS[d.getMonth()].slice(0,3)}</div>
         </div>
-        <div style="flex:1;">
+        <div style="flex:1;cursor:pointer;" onclick="showProbeDetail(${p.id})">
           <div style="font-weight:600;font-size:0.92rem;">${p.thema || 'Probe'}</div>
           <div style="font-size:0.78rem;color:var(--text-muted);">🕐 ${p.uhrzeit || '19:00'} Uhr</div>
         </div>
       </div>
-      ${lines.length ? `<div style="margin-left:66px;">
+      ${hasLines ? `<div style="margin-left:66px;margin-bottom:${hasSongs ? '8px' : '0'};">
         ${lines.slice(0,4).map(l => `<div style="font-size:0.8rem;color:var(--text-muted);padding:1px 0;display:flex;align-items:flex-start;gap:6px;"><span style="color:var(--accent);margin-top:2px;">▸</span><span>${l}</span></div>`).join('')}
         ${lines.length > 4 ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px;">+ ${lines.length - 4} weitere…</div>` : ''}
+      </div>` : ''}
+      ${hasSongs ? `<div style="margin-left:66px;display:flex;flex-wrap:wrap;gap:6px;">
+        ${songs.map(s => `<a href="${s.url}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:rgba(255,0,0,.15);border:1px solid rgba(255,60,60,.3);border-radius:20px;font-size:0.75rem;color:#ff6b6b;text-decoration:none;transition:background .15s;" onmouseover="this.style.background='rgba(255,0,0,.25)'" onmouseout="this.style.background='rgba(255,0,0,.15)'">▶ ${s.title}</a>`).join('')}
       </div>` : ''}
     </div>`;
   }).join('');
